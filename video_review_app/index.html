@@ -94,11 +94,30 @@
       <div class="actions">
         <button id="saveProject" type="button">Save locally</button>
         <button id="exportJson" type="button">Export JSON report</button>
+        <button id="previewReport" type="button">Preview report</button>
+        <button id="saveReport" type="button">Save report to history</button>
         <button id="printReport" type="button">Print / Save PDF</button>
         <button id="resetProject" type="button" class="danger">Reset</button>
       </div>
     </section>
+
+    <section class="card">
+      <h2>Saved reports</h2>
+      <p class="muted">Completed reports saved in this browser only. Loading one restores its fields into the editor; video files are not stored, so re-select clips if you need them.</p>
+      <div id="reportHistory"></div>
+    </section>
   </main>
+
+  <section id="reportView" class="report-view" hidden>
+    <div class="report-view-bar">
+      <span><strong>Report preview</strong> — this is the document that prints / saves as PDF.</span>
+      <span>
+        <button id="printPreview" type="button">Print / Save PDF</button>
+        <button id="closePreview" type="button">Close preview</button>
+      </span>
+    </div>
+    <div id="reportDoc"></div>
+  </section>
 
   <footer>
     <p>Prototype rule set: cutting/ordering, framing motion, speed changes, transitions, text overlays, and source-audio edits are in scope. New AI imagery, retouching/relighting, greenscreen/background replacement, color grading/filters/LUTs, generated title animation, and added non-source audio are prohibited.</p>

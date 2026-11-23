@@ -1,3 +1,15 @@
+const APP_NAME = 'ClipScope';
+const APP_VERSION = '1.0.0';
+const REPORT_FORMAT = 'clipscope-report';
+const REPORT_VERSION = '1.0.0';
+const HISTORY_KEY = 'clipscope-reports';
+const HISTORY_LIMIT = 50;
+
+function newReportId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return `rep-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const scopeRules = [
   { id: 'newImagery', label: 'AI-generated new imagery or footage' },
   { id: 'retouch', label: 'Retouching or relighting' },
@@ -26,7 +38,10 @@ const defaultCriteria = [
 ];
 
 const state = {
-  clips: [], editedVideoName: '', rubric: structuredClone(defaultCriteria), capturedStart: null, capturedEnd: null
+  clips: [], editedVideoName: '', rubric: structuredClone(defaultCriteria), capturedStart: null, capturedEnd: null,
+  // One stable id per evaluation: export, preview, and history-save of the
+  // same project all share it, so a report keeps its identity.
+  reportId: newReportId()
 };
 
 const $ = id => document.getElementById(id);
@@ -36,7 +51,8 @@ const els = {
   setStart: $('setStart'), setEnd: $('setEnd'), timeCapture: $('timeCapture'), scopeRules: $('scopeRules'),
   manualUnknownViolation: $('manualUnknownViolation'), violationNotes: $('violationNotes'), scopeResult: $('scopeResult'),
   rubric: $('rubric'), weightTotal: $('weightTotal'), overallNotes: $('overallNotes'), finalScore: $('finalScore'),
-  finalStatus: $('finalStatus'), checklist: $('checklist'), projectStatus: $('projectStatus')
+  finalStatus: $('finalStatus'), checklist: $('checklist'), projectStatus: $('projectStatus'),
+  reportView: $('reportView'), reportDoc: $('reportDoc'), reportHistory: $('reportHistory')
 };
 
 function fmtTime(seconds) {
@@ -127,12 +143,17 @@ function renderRubric() {
   }));
 }
 
-function scopeViolations() {
+function scopeViolationsDetail() {
   const checked = [...document.querySelectorAll('[data-scope-id]:checked')].map(x => {
-    return scopeRules.find(r => r.id === x.dataset.scopeId)?.label;
+    const rule = scopeRules.find(r => r.id === x.dataset.scopeId);
+    return rule ? { id: rule.id, label: rule.label } : null;
   }).filter(Boolean);
-  if (els.manualUnknownViolation.checked) checked.push('Other out-of-scope behavior observed');
+  if (els.manualUnknownViolation.checked) checked.push({ id: 'other', label: 'Other out-of-scope behavior observed' });
   return checked;
+}
+
+function scopeViolations() {
+  return scopeViolationsDetail().map(v => v.label);
 }
 
 function computeScore() {
@@ -193,19 +214,76 @@ function updateAll(runLint = true) {
   els.projectStatus.className = `pill ${doneCount===5 ? 'pass' : ''}`;
 }
 
-function projectData() {
+/**
+ * ClipScope report schema (reportVersion 1.0.0).
+ *
+ * Top-level fields kept from the 0.1.0 export, unchanged in shape, so older
+ * readers keep working: app, version, exportedAt, category, editingPrompt,
+ * rawClips, editedVideo, capturedRange, scope.violations (string labels),
+ * rubric (plain criterion array), evaluation, checklist.
+ *
+ * New in 1.0.0: reportFormat, reportVersion, reportId, project metadata,
+ * deliverables (all five workflow steps with completion state), promptAnalysis,
+ * scope.outcome + scope.violationsDetail, rubricSummary (weights, weighted
+ * contributions, computed score), and formatted capture times.
+ */
+function buildReport() {
   const result = computeScore();
+  const weightTotal = state.rubric.reduce((a, r) => a + Number(r.weight || 0), 0);
+  const lintHits = lintPrompt();
+  const category = els.category.value.trim();
+  const deliverables = completion().map(([label, complete], i) => ({
+    id: ['category', 'rawClips', 'editingPrompt', 'rubric', 'evaluation'][i],
+    label, complete
+  }));
+  const criteria = state.rubric.map(r => ({
+    name: r.name, weight: Number(r.weight || 0), score: Number(r.score || 0),
+    weightedContribution: Math.round(Number(r.weight || 0) * Number(r.score || 0) / 100 * 10) / 10,
+    evidence: r.evidence || '', notes: r.notes || ''
+  }));
   return {
-    app: 'ClipScope', version: '0.1.0', exportedAt: new Date().toISOString(),
-    category: els.category.value.trim(), editingPrompt: els.prompt.value.trim(),
-    rawClips: state.clips.map((c,i)=>({clipNumber:i+1,name:c.name,sizeBytes:c.size,type:c.type})),
+    reportFormat: REPORT_FORMAT,
+    reportVersion: REPORT_VERSION,
+    app: APP_NAME,
+    version: APP_VERSION,
+    reportId: state.reportId,
+    exportedAt: new Date().toISOString(),
+    project: {
+      title: category ? `ClipScope — ${category}` : 'Untitled ClipScope project',
+      category: category || null
+    },
+    deliverables,
+    category,
+    editingPrompt: els.prompt.value.trim(),
+    promptAnalysis: { prompt: els.prompt.value.trim(), lintHits, passed: lintHits.length === 0 },
+    rawClips: state.clips.map((c, i) => ({ clipNumber: i + 1, name: c.name, sizeBytes: c.size, type: c.type })),
     editedVideo: state.editedVideoName || null,
-    capturedRange: { startSeconds: state.capturedStart, endSeconds: state.capturedEnd },
-    scope: { autoFail: result.autoFail, violations: result.violations, notes: els.violationNotes.value.trim() },
+    capturedRange: {
+      startSeconds: state.capturedStart, endSeconds: state.capturedEnd,
+      startFormatted: fmtTime(state.capturedStart), endFormatted: fmtTime(state.capturedEnd)
+    },
+    scope: {
+      outcome: result.autoFail ? 'fail' : 'pass',
+      autoFail: result.autoFail,
+      violations: result.violations,
+      violationsDetail: scopeViolationsDetail(),
+      notes: els.violationNotes.value.trim()
+    },
     rubric: state.rubric,
+    rubricSummary: {
+      weightTotal: Math.round(weightTotal * 100) / 100,
+      weightsValid: Math.round(weightTotal * 100) / 100 === 100,
+      criteria,
+      score: result.score,
+      scored: result.score != null && !result.autoFail
+    },
     evaluation: { score: result.score, notes: els.overallNotes.value.trim() },
-    checklist: completion().map(([label, complete])=>({label, complete}))
+    checklist: completion().map(([label, complete]) => ({ label, complete }))
   };
+}
+
+function projectData() {
+  return buildReport();
 }
 
 function saveLocal() {
@@ -219,19 +297,23 @@ function saveLocal() {
   alert('Project fields saved locally. Video files themselves are not stored by the browser.');
 }
 
+function applyProjectFields(p) {
+  if (p.reportId) state.reportId = p.reportId;
+  els.category.value = p.category || ''; els.prompt.value = p.prompt || ''; els.violationNotes.value = p.violationNotes || '';
+  els.overallNotes.value = p.overallNotes || ''; state.rubric = p.rubric?.length ? p.rubric : structuredClone(defaultCriteria);
+  state.editedVideoName = p.editedVideoName || ''; state.capturedStart = p.capturedStart ?? null; state.capturedEnd = p.capturedEnd ?? null;
+  renderRubric();
+  document.querySelectorAll('[data-scope-id]').forEach(x => { x.checked = false; });
+  (p.scopeIds || []).forEach(id => { const x = document.querySelector(`[data-scope-id="${id}"]`); if (x) x.checked = true; });
+  els.manualUnknownViolation.checked = !!p.manualUnknownViolation;
+  els.timeCapture.textContent = `Start ${fmtTime(state.capturedStart)} / End ${fmtTime(state.capturedEnd)}`;
+  updateAll();
+}
+
 function loadLocal() {
   const raw = localStorage.getItem('clipscope-project');
   if (!raw) return;
-  try {
-    const p = JSON.parse(raw);
-    els.category.value = p.category || ''; els.prompt.value = p.prompt || ''; els.violationNotes.value = p.violationNotes || '';
-    els.overallNotes.value = p.overallNotes || ''; state.rubric = p.rubric?.length ? p.rubric : structuredClone(defaultCriteria);
-    state.editedVideoName = p.editedVideoName || ''; state.capturedStart = p.capturedStart ?? null; state.capturedEnd = p.capturedEnd ?? null;
-    renderRubric();
-    (p.scopeIds || []).forEach(id => { const x = document.querySelector(`[data-scope-id="${id}"]`); if (x) x.checked = true; });
-    els.manualUnknownViolation.checked = !!p.manualUnknownViolation;
-    els.timeCapture.textContent = `Start ${fmtTime(state.capturedStart)} / End ${fmtTime(state.capturedEnd)}`;
-  } catch {}
+  try { applyProjectFields(JSON.parse(raw)); } catch {}
 }
 
 function exportJson() {
@@ -241,11 +323,216 @@ function exportJson() {
   URL.revokeObjectURL(a.href);
 }
 
+function downloadReportJson(report, filename) {
+  const blob = new Blob([JSON.stringify(report, null, 2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+  a.download = filename; a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ---- Printable report view + preview ---- */
+
+function renderReportView() {
+  const r = buildReport();
+  const date = new Date(r.exportedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  const statusText = r.scope.outcome === 'fail' ? 'AUTOMATIC FAIL' : (r.rubricSummary.scored ? `Scored — ${r.evaluation.score.toFixed(1)} / 100` : 'Not yet scored');
+  const statusClass = r.scope.outcome === 'fail' ? 'fail' : (r.rubricSummary.scored ? 'pass' : '');
+  const rows = r.rubricSummary.criteria.map(c => `
+    <tr>
+      <td>${escapeHtml(c.name) || '—'}</td>
+      <td class="num">${c.weight}%</td>
+      <td class="num">${c.score}</td>
+      <td class="num">${c.weightedContribution.toFixed(1)}</td>
+      <td>${escapeHtml(c.evidence) || '—'}</td>
+      <td>${escapeHtml(c.notes) || '—'}</td>
+    </tr>`).join('');
+  const clips = r.rawClips.length
+    ? r.rawClips.map(c => `<li>Clip ${c.clipNumber} — ${escapeHtml(c.name)} (${(c.sizeBytes / 1024 / 1024).toFixed(1)} MB)</li>`).join('')
+    : '<li>No raw clips recorded.</li>';
+  const violations = r.scope.violations.length
+    ? `<ul>${r.scope.violations.map(v => `<li>${escapeHtml(v)}</li>`).join('')}</ul>`
+    : '<p>No prohibited operation was marked.</p>';
+  const checks = r.deliverables.map(d => `<li class="${d.complete ? 'done' : ''}">${d.complete ? '✓' : '○'} ${escapeHtml(d.label)}</li>`).join('');
+  els.reportDoc.innerHTML = `
+    <div class="report-doc">
+      <header class="report-header">
+        <div>
+          <p class="report-kicker">ClipScope — Video Edit Analysis &amp; Rating</p>
+          <h1>${escapeHtml(r.project.title)}</h1>
+          <p class="muted">Category: ${escapeHtml(r.project.category || '—')} &nbsp;·&nbsp; Report ID: ${escapeHtml(r.reportId)} &nbsp;·&nbsp; ${escapeHtml(date)}</p>
+        </div>
+        <div class="pill ${statusClass}">${statusText}</div>
+      </header>
+
+      <section class="report-section">
+        <h2>Workflow deliverables</h2>
+        <ul class="report-checks">${checks}</ul>
+      </section>
+
+      <section class="report-section">
+        <h2>1 · Project setup</h2>
+        <p><strong>Category:</strong> ${escapeHtml(r.category) || '—'}</p>
+        <p><strong>Editing prompt:</strong></p>
+        <blockquote>${escapeHtml(r.editingPrompt) || '—'}</blockquote>
+        <p><strong>Prompt scope check:</strong> ${r.promptAnalysis.passed ? 'Passed — no prohibited language detected.' : `Flagged: ${escapeHtml(r.promptAnalysis.lintHits.join('; '))}`}</p>
+      </section>
+
+      <section class="report-section">
+        <h2>2 · Raw source footage</h2>
+        <ul>${clips}</ul>
+      </section>
+
+      <section class="report-section">
+        <h2>3 · Generated edit</h2>
+        <p><strong>Edited video:</strong> ${escapeHtml(r.editedVideo) || '—'}</p>
+        <p><strong>Captured range:</strong> ${escapeHtml(r.capturedRange.startFormatted)} – ${escapeHtml(r.capturedRange.endFormatted)}</p>
+      </section>
+
+      <section class="report-section">
+        <h2>4 · Scope gate — ${r.scope.outcome === 'fail' ? 'AUTOMATIC FAIL' : 'PASS'}</h2>
+        ${violations}
+        ${r.scope.notes ? `<p><strong>Violation notes:</strong> ${escapeHtml(r.scope.notes)}</p>` : ''}
+      </section>
+
+      <section class="report-section">
+        <h2>5 · Weighted rubric</h2>
+        <table class="report-table">
+          <thead><tr><th>Criterion</th><th>Weight</th><th>Score / 100</th><th>Weighted</th><th>Evidence</th><th>Notes</th></tr></thead>
+          <tbody>${rows}</tbody>
+          <tfoot><tr><td><strong>Total</strong></td><td class="num"><strong>${r.rubricSummary.weightTotal}%</strong></td><td></td><td class="num"><strong>${r.rubricSummary.scored ? r.evaluation.score.toFixed(1) : '—'}</strong></td><td colspan="2">${r.rubricSummary.weightsValid ? '' : 'Weights must total 100% to score.'}</td></tr></tfoot>
+        </table>
+      </section>
+
+      <section class="report-section">
+        <h2>Evaluation notes</h2>
+        <blockquote>${escapeHtml(r.evaluation.notes) || '—'}</blockquote>
+      </section>
+
+      <footer class="report-footer">
+        Generated by ClipScope ${APP_VERSION} · Report format ${REPORT_FORMAT} ${REPORT_VERSION} · Local-first: no data leaves this browser.
+      </footer>
+    </div>`;
+  return r;
+}
+
+function showReportPreview() {
+  renderReportView();
+  els.reportView.hidden = false;
+  els.reportView.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+}
+
+function hideReportPreview() {
+  els.reportView.hidden = true;
+}
+
+function printReport() {
+  renderReportView();
+  els.reportView.hidden = false;
+  document.body.classList.add('printing-report');
+  window.print();
+}
+window.addEventListener('afterprint', () => {
+  document.body.classList.remove('printing-report');
+});
+
+/* ---- Report history (localStorage, local-first) ---- */
+
+function readHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return Array.isArray(list) ? list : [];
+  } catch { return []; }
+}
+
+function writeHistory(list) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_LIMIT)));
+}
+
+function saveReportToHistory() {
+  const report = buildReport();
+  const entry = {
+    id: report.reportId,
+    savedAt: report.exportedAt,
+    title: report.project.title,
+    category: report.project.category,
+    score: report.evaluation.score,
+    autoFail: report.scope.autoFail,
+    report
+  };
+  const list = readHistory().filter(e => e.id !== entry.id);
+  list.unshift(entry);
+  writeHistory(list);
+  renderHistory();
+  alert(`Report saved to history (${list.length} saved).`);
+}
+
+function renderHistory() {
+  const list = readHistory();
+  if (!list.length) {
+    els.reportHistory.innerHTML = '<p class="muted">No saved reports yet. Complete an evaluation and use “Save report to history”.</p>';
+    return;
+  }
+  els.reportHistory.innerHTML = list.map(e => {
+    const date = new Date(e.savedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    const status = e.autoFail ? 'AUTO-FAIL' : (e.score != null ? `${Number(e.score).toFixed(1)} / 100` : 'Not scored');
+    return `
+    <div class="history-item" data-history-id="${escapeHtml(e.id)}">
+      <div class="history-meta">
+        <strong>${escapeHtml(e.title)}</strong>
+        <span class="muted">${escapeHtml(date)} · ${status}</span>
+      </div>
+      <div class="history-actions">
+        <button type="button" data-history-load="${escapeHtml(e.id)}">Load</button>
+        <button type="button" data-history-export="${escapeHtml(e.id)}">Export JSON</button>
+        <button type="button" class="danger" data-history-delete="${escapeHtml(e.id)}">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+  els.reportHistory.querySelectorAll('[data-history-load]').forEach(btn => btn.addEventListener('click', () => loadReportFromHistory(btn.dataset.historyLoad)));
+  els.reportHistory.querySelectorAll('[data-history-export]').forEach(btn => btn.addEventListener('click', () => exportHistoryReport(btn.dataset.historyExport)));
+  els.reportHistory.querySelectorAll('[data-history-delete]').forEach(btn => btn.addEventListener('click', () => deleteHistoryReport(btn.dataset.historyDelete)));
+}
+
+function loadReportFromHistory(id) {
+  const entry = readHistory().find(e => e.id === id);
+  if (!entry) return;
+  const r = entry.report;
+  applyProjectFields({
+    reportId: entry.id,
+    category: r.category || '',
+    prompt: r.editingPrompt || '',
+    violationNotes: r.scope?.notes || '',
+    overallNotes: r.evaluation?.notes || '',
+    rubric: r.rubric,
+    scopeIds: (r.scope?.violationsDetail || []).map(v => v.id).filter(x => x !== 'other'),
+    manualUnknownViolation: (r.scope?.violationsDetail || []).some(v => v.id === 'other'),
+    editedVideoName: r.editedVideo || '',
+    capturedStart: r.capturedRange?.startSeconds ?? null,
+    capturedEnd: r.capturedRange?.endSeconds ?? null
+  });
+  hideReportPreview();
+  alert('Report loaded into the editor. Note: video files are not stored, so re-select the raw clips and the generated edit if you need them.');
+  document.querySelector('.layout')?.scrollIntoView?.({ behavior: 'smooth' });
+}
+
+function exportHistoryReport(id) {
+  const entry = readHistory().find(e => e.id === id);
+  if (!entry) return;
+  downloadReportJson(entry.report, `clipscope-report-${entry.savedAt.slice(0, 10)}-${entry.id.slice(0, 8)}.json`);
+}
+
+function deleteHistoryReport(id) {
+  if (!confirm('Delete this saved report?')) return;
+  writeHistory(readHistory().filter(e => e.id !== id));
+  renderHistory();
+}
+
 function escapeHtml(str) {
   return String(str).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 }
 
-renderScopeRules(); renderRubric(); loadLocal(); renderClips(); updateAll();
+renderScopeRules(); renderRubric(); loadLocal(); renderClips(); renderHistory(); updateAll();
 
 els.category.addEventListener('input', updateAll);
 els.prompt.addEventListener('input', updateAll);
@@ -279,7 +566,11 @@ els.setEnd.addEventListener('click', () => {
 $('addCriterion').addEventListener('click', () => { state.rubric.push({name:'',weight:0,score:0,evidence:'',notes:''}); renderRubric(); updateAll(false); });
 $('saveProject').addEventListener('click', saveLocal);
 $('exportJson').addEventListener('click', exportJson);
-$('printReport').addEventListener('click', () => window.print());
+$('previewReport').addEventListener('click', showReportPreview);
+$('saveReport').addEventListener('click', saveReportToHistory);
+$('printReport').addEventListener('click', printReport);
+$('printPreview').addEventListener('click', printReport);
+$('closePreview').addEventListener('click', hideReportPreview);
 $('resetProject').addEventListener('click', () => {
   if (!confirm('Reset all project fields?')) return;
   localStorage.removeItem('clipscope-project'); location.reload();
