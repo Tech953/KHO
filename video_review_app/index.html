@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#151515" />
+  <title>ClipScope — Video Edit Analysis & Rating</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>ClipScope</h1>
+      <p>Video edit analysis, scope enforcement, rubric scoring, and export.</p>
+    </div>
+    <div class="pill" id="projectStatus">Incomplete</div>
+  </header>
+
+  <main class="layout">
+    <section class="card">
+      <h2>1. Project setup</h2>
+      <label>Video category <span class="req">required</span>
+        <input id="category" placeholder="Enter exactly one taxonomy category" />
+      </label>
+      <label>Editing prompt <span class="req">required</span>
+        <textarea id="prompt" rows="7" placeholder="Write the natural-language brief you would send to the AI video editor."></textarea>
+      </label>
+      <div id="promptLint" class="notice neutral">No prompt entered yet.</div>
+    </section>
+
+    <section class="card">
+      <h2>2. Raw source footage</h2>
+      <p class="muted">Add multiple raw clips or one long raw clip. Files stay in your browser session and are not uploaded by this prototype.</p>
+      <input id="rawClips" type="file" accept="video/*" multiple />
+      <div id="clipList" class="clip-list empty">No raw clips selected.</div>
+    </section>
+
+    <section class="card">
+      <h2>3. Generated edit</h2>
+      <p class="muted">Load the single edited video you want to evaluate.</p>
+      <input id="editedVideo" type="file" accept="video/*" />
+      <video id="videoPlayer" controls playsinline></video>
+      <div class="time-row">
+        <button id="setStart" type="button">Use current time as start</button>
+        <button id="setEnd" type="button">Use current time as end</button>
+        <span id="timeCapture">Start — / End —</span>
+      </div>
+    </section>
+
+    <section class="card scope-card">
+      <h2>4. Scope gate</h2>
+      <p>Any prohibited operation is an automatic fail.</p>
+      <div id="scopeRules"></div>
+      <label class="checkbox-row manual-violation">
+        <input id="manualUnknownViolation" type="checkbox" />
+        <span><strong>Other out-of-scope behavior observed</strong><br><small>Use when the edit contains a prohibited transformation not captured above.</small></span>
+      </label>
+      <label>Violation notes
+        <textarea id="violationNotes" rows="3" placeholder="Describe any evidence of an out-of-scope edit."></textarea>
+      </label>
+      <div id="scopeResult" class="notice neutral">Scope not yet evaluated.</div>
+    </section>
+
+    <section class="card">
+      <div class="section-title-row">
+        <div>
+          <h2>5. Finalized weighted rubric</h2>
+          <p class="muted">Fill real timestamps, verify clip references, and make total weight exactly 100%.</p>
+        </div>
+        <button id="addCriterion" type="button">Add criterion</button>
+      </div>
+      <div id="rubric"></div>
+      <div class="weight-summary">Total weight: <strong id="weightTotal">0%</strong></div>
+    </section>
+
+    <section class="card">
+      <h2>6. Scored evaluation</h2>
+      <label>Overall written notes <span class="req">required</span>
+        <textarea id="overallNotes" rows="5" placeholder="Summarize strengths, misses, and concrete evidence from the edit."></textarea>
+      </label>
+      <div class="scorebox">
+        <div>
+          <span class="score-label">Final score</span>
+          <strong id="finalScore">—</strong>
+        </div>
+        <div id="finalStatus" class="pill">Incomplete</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Workflow checklist</h2>
+      <div id="checklist"></div>
+      <div class="actions">
+        <button id="saveProject" type="button">Save locally</button>
+        <button id="exportJson" type="button">Export JSON report</button>
+        <button id="printReport" type="button">Print / Save PDF</button>
+        <button id="resetProject" type="button" class="danger">Reset</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Prototype rule set: cutting/ordering, framing motion, speed changes, transitions, text overlays, and source-audio edits are in scope. New AI imagery, retouching/relighting, greenscreen/background replacement, color grading/filters/LUTs, generated title animation, and added non-source audio are prohibited.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
